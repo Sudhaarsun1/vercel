@@ -1,56 +1,56 @@
-# api/index.py
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 import numpy as np
+import json
+import os
 
-# --- 1. Initialize FastAPI app ---
+# --- 1. Initialize FastAPI app and enable CORS ---
 app = FastAPI()
 
-
-# --- 2. Enable CORS ---
-# This middleware will allow POST requests from any origin.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods, including POST
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["POST"],
+    allow_headers=["*"],
 )
 
+# --- 2. Load Telemetry Data at Startup ---
+# Get the directory of the current script to build the correct file path.
+# This ensures it works correctly in the Vercel serverless environment.
+api_dir = os.path.dirname(os.path.abspath(__file__))
+telemetry_path = os.path.join(api_dir, '..', 'telemetry.json')
 
-# --- 3. Define Pydantic Models for Request Body Validation ---
-# This model represents a single data point in the "regions" list.
-class RegionData(BaseModel):
-    region: str
-    latency_ms: int
-    uptime_status: bool  # True for up, False for down
+with open(telemetry_path, 'r') as f:
+    telemetry_data = json.load(f)
 
-# This is the main model for the entire request body.
+# --- 3. Define Pydantic Models for Request Body ---
 class MetricsRequest(BaseModel):
-    regions: List[RegionData]
+    regions: List[str]
     threshold_ms: int
 
-
-# --- 4. Define the POST Endpoint for Metrics Calculation ---
+# --- 4. Define the POST Endpoint for Metrics ---
 @app.post("/metrics")
-def calculate_metrics(request: MetricsRequest):
-    """
-    Accepts a list of regional data points and a latency threshold,
-    then calculates and returns key metrics for each region.
-    """
-    if not request.regions:
+def get_metrics(request: MetricsRequest):
+    # Filter the master data based on regions in the request
+    filtered_data = [
+        item for item in telemetry_data if item["region"] in request.regions
+    ]
+
+    if not filtered_data:
         return {}
 
-    # Group data by region name
+    # Group the filtered data by region
     grouped_data = {}
-    for record in request.regions:
-        if record.region not in grouped_data:
-            grouped_data[record.region] = {"latencies": [], "uptimes": []}
+    for record in filtered_data:
+        region = record["region"]
+        if region not in grouped_data:
+            grouped_data[region] = {"latencies": [], "uptimes": []}
         
-        grouped_data[record.region]["latencies"].append(record.latency_ms)
-        grouped_data[record.region]["uptimes"].append(record.uptime_status)
+        grouped_data[region]["latencies"].append(record["latency_ms"])
+        grouped_data[region]["uptimes"].append(record["uptime_status"])
 
     # Calculate metrics for each region
     results = {}
@@ -61,14 +61,12 @@ def calculate_metrics(request: MetricsRequest):
         results[region] = {
             "avg_latency": np.mean(latencies),
             "p95_latency": np.percentile(latencies, 95),
-            "avg_uptime": np.mean(uptimes),  # Mean of bools (True=1, False=0) gives the uptime ratio
-            "breaches": int(np.sum(latencies > request.threshold_ms)) # Count where latency > threshold
+            "avg_uptime": np.mean(uptimes),
+            "breaches": int(np.sum(latencies > request.threshold_ms))
         }
     
     return results
 
-
-# --- Original root endpoint (optional) ---
 @app.get("/")
 def read_root():
-    return {"message": "Metrics API is running. Use the /metrics endpoint with a POST request."}
+    return {"message": "eShopCo Telemetry Service"}
