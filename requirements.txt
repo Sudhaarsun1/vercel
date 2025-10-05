@@ -1,1 +1,3 @@
 fastapi
+numpy
+uvicorn
